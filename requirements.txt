@@ -7,3 +7,4 @@ langchain-google-genai==2.1.12
 chromadb==1.5.5
 pypdf==5.9.0
 python-dotenv==1.2.2
+requests==2.32.5
