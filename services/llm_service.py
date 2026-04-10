@@ -33,42 +33,6 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     return _LLM_CLIENT
 
 
-def _azure_chat(prompt_text: str, deployment: str) -> str:
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
-    api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY", "")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-    if not endpoint or not api_key:
-        raise RuntimeError("Azure OpenAI credentials are missing. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY.")
-
-    url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-    headers = {
-        "api-key": api_key,
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "messages": [
-            {"role": "user", "content": prompt_text},
-        ],
-        "temperature": 0.2,
-    }
-    response = requests.post(url, headers=headers, json=payload, timeout=90)
-    set_runtime_status(
-        "llm",
-        "azure",
-        {
-            "remaining_requests": response.headers.get("x-ratelimit-remaining-requests", "unknown"),
-            "remaining_tokens": response.headers.get("x-ratelimit-remaining-tokens", "unknown"),
-            "status": "ok" if response.ok else "error",
-        },
-    )
-    response.raise_for_status()
-    data = response.json()
-    choices = data.get("choices", [])
-    if not choices:
-        return ""
-    return choices[0].get("message", {}).get("content", "")
-
-
 def _hf_chat(prompt_text: str, model: str) -> str:
     api_key = os.getenv("HF_API_KEY", "")
     if not api_key:
@@ -93,6 +57,7 @@ def _hf_chat(prompt_text: str, model: str) -> str:
         "huggingface",
         {
             "remaining_requests": response.headers.get("x-ratelimit-remaining", "unknown"),
+            "model": model,
             "status": "ok" if response.ok else "error",
         },
     )
@@ -103,6 +68,90 @@ def _hf_chat(prompt_text: str, model: str) -> str:
     if isinstance(data, dict):
         return data.get("generated_text", "")
     return ""
+
+
+def _groq_chat(prompt_text: str, model: str) -> str:
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Groq API key is missing. Set GROQ_API_KEY.")
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt_text},
+        ],
+        "temperature": 0.2,
+    }
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
+    status_payload = {
+        "status": "ok" if response.ok else "error",
+        "model": model,
+    }
+    if response.ok:
+        try:
+            usage = response.json().get("usage", {})
+            if usage:
+                status_payload["prompt_tokens"] = usage.get("prompt_tokens", "unknown")
+                status_payload["completion_tokens"] = usage.get("completion_tokens", "unknown")
+        except Exception:
+            pass
+    set_runtime_status("llm", "groq", status_payload)
+    response.raise_for_status()
+    data = response.json()
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+    return choices[0].get("message", {}).get("content", "")
+
+
+def _github_models_chat(prompt_text: str, model: str) -> str:
+    api_key = os.getenv("GITHUB_MODELS_TOKEN", "")
+    if not api_key:
+        raise RuntimeError("GitHub Models token is missing. Set GITHUB_MODELS_TOKEN.")
+
+    url = "https://models.inference.ai.azure.com/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt_text},
+        ],
+        "temperature": 0.2,
+    }
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
+    status_payload = {
+        "status": "ok" if response.ok else "error",
+        "model": model,
+        "remaining_requests": response.headers.get("x-ratelimit-remaining-requests", "unknown"),
+        "remaining_tokens": response.headers.get("x-ratelimit-remaining-tokens", "unknown"),
+    }
+    if not response.ok:
+        try:
+            err_json = response.json()
+            message = (
+                err_json.get("error", {}).get("message")
+                if isinstance(err_json, dict)
+                else None
+            )
+            if message:
+                status_payload["error_message"] = message
+        except Exception:
+            pass
+    set_runtime_status("llm", "github-models", status_payload)
+    response.raise_for_status()
+    data = response.json()
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+    return choices[0].get("message", {}).get("content", "")
 
 
 def _extract_retry_seconds(error_text: str) -> Optional[int]:
@@ -172,11 +221,26 @@ def _run_llm(provider: str, model: str, prompt_text: str, messages):
         response = _invoke_google_with_model_fallback(messages, preferred_model=model)
         set_runtime_status("llm", "google", {"status": "ok", "model": model})
         return response.content
-    if p == "azure":
-        return _azure_chat(prompt_text, deployment=model)
     if p == "huggingface":
         return _hf_chat(prompt_text, model=model)
+    if p == "groq":
+        return _groq_chat(prompt_text, model=model)
+    if p == "github-models":
+        return _github_models_chat(prompt_text, model=model)
     raise RuntimeError(f"Unsupported llm provider: {provider}")
+
+
+def _provider_retry_hint(provider: str) -> str:
+    p = provider.lower().strip()
+    if p == "google":
+        return "請確認 GOOGLE_CHAT_MODEL 可用，或改用 github-models / groq。"
+    if p == "github-models":
+        return "請改用 gpt-4o-mini，並確認 GITHUB_MODELS_TOKEN 有該模型權限。"
+    if p == "huggingface":
+        return "請確認 HF_API_KEY 有效，並優先選擇公開可用模型。"
+    if p == "groq":
+        return "請確認 GROQ_API_KEY 有效且模型仍在可用清單。"
+    return "請檢查模型名稱與 API Key 權限。"
 
 
 def _build_extractive_fallback_answer(query: str, docs) -> str:
@@ -203,8 +267,27 @@ def get_answer(vectorstore, query: str, provider: str = "google", model: Optiona
     if not query:
         return {"result": "Please provide a question."}
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-    docs = retriever.invoke(query)
+    docs = []
+    try:
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+        docs = retriever.invoke(query)
+    except Exception as exc:
+        set_runtime_status(
+            "embedding",
+            "retrieval",
+            {
+                "status": "error",
+                "reason": str(exc),
+            },
+        )
+        return {
+            "result": (
+                "文件檢索暫時失敗，可能是向量維度與目前 Embedding Provider 不一致。"
+                "請重新上傳 PDF 以用目前的 Embedding Provider 重建索引後再試。"
+                f" Error: {exc}"
+            )
+        }
+
     context = "\n\n".join(doc.page_content for doc in docs) if docs else ""
 
     if not context:
@@ -229,12 +312,36 @@ Question:
         if selected_provider == "google":
             _get_llm()
             selected_model = model or (_RESOLVED_CHAT_MODEL or CHAT_MODEL or FALLBACK_CHAT_MODELS[0])
-        elif selected_provider == "azure":
-            azure_models = [x.strip() for x in os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENTS", "gpt-4o-mini").split(",") if x.strip()]
-            selected_model = model or azure_models[0]
         elif selected_provider == "huggingface":
-            hf_models = [x.strip() for x in os.getenv("HF_LLM_MODELS", "mistralai/Mistral-7B-Instruct-v0.3").split(",") if x.strip()]
+            hf_models = [
+                x.strip()
+                for x in os.getenv(
+                    "HF_LLM_MODELS",
+                    "mistralai/Mistral-7B-Instruct-v0.3,microsoft/phi-3.5-mini-instruct,TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                ).split(",")
+                if x.strip()
+            ]
             selected_model = model or hf_models[0]
+        elif selected_provider == "groq":
+            groq_models = [
+                x.strip()
+                for x in os.getenv(
+                    "GROQ_LLM_MODELS",
+                    "llama-3.1-8b-instant,llama-3.3-70b-versatile,gemma2-9b-it",
+                ).split(",")
+                if x.strip()
+            ]
+            selected_model = model or groq_models[0]
+        elif selected_provider == "github-models":
+            github_models = [
+                x.strip()
+                for x in os.getenv(
+                    "GITHUB_MODELS_LLM_MODELS",
+                    "gpt-4o-mini,llama-2-7b,phi-3.5-mini",
+                ).split(",")
+                if x.strip()
+            ]
+            selected_model = model or github_models[0]
         else:
             raise RuntimeError(f"Unsupported llm provider: {provider}")
 
@@ -264,10 +371,11 @@ Question:
                 "reason": str(exc),
             },
         )
+        provider_hint = _provider_retry_hint(provider)
         return {
             "result": (
-                "The assistant model is currently unavailable for this API key. "
-                "Please set GOOGLE_CHAT_MODEL to a supported model and retry. "
+                "目前選擇的模型暫時不可用。"
+                f"{provider_hint} "
                 f"Error: {exc}"
             )
         }

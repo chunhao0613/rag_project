@@ -1,18 +1,25 @@
 from typing import Any, Dict, List
 import os
+from datetime import datetime, timezone
 
 import requests
 
-EMBEDDING_PROVIDERS = ["google", "azure", "huggingface", "local"]
-LLM_PROVIDERS = ["google", "azure", "huggingface"]
+EMBEDDING_PROVIDERS = ["google", "cohere", "together", "huggingface", "local"]
+LLM_PROVIDERS = ["google", "huggingface", "groq", "github-models"]
 
 DEFAULT_EMBEDDING_MODELS: Dict[str, List[str]] = {
 	"google": [
 		"models/gemini-embedding-001",
 		"models/text-embedding-004",
 	],
-	"azure": [
-		"text-embedding-3-small",
+	"cohere": [
+		"embed-multilingual-v3.0",
+		"embed-english-v3.0",
+	],
+	"together": [
+		"BAAI/bge-small-en-v1.5",
+		"nomic-ai/nomic-embed-text-v1.5",
+		"Alibaba-NLP/gte-base-en-v1.5",
 	],
 	"huggingface": [
 		"sentence-transformers/all-MiniLM-L6-v2",
@@ -28,12 +35,20 @@ DEFAULT_LLM_MODELS: Dict[str, List[str]] = {
 		"gemini-flash-latest",
 		"gemini-2.5-flash",
 	],
-	"azure": [
-		"gpt-4o-mini",
-	],
 	"huggingface": [
 		"mistralai/Mistral-7B-Instruct-v0.3",
-		"meta-llama/Llama-3.1-8B-Instruct",
+		"microsoft/phi-3.5-mini-instruct",
+		"TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+	],
+	"groq": [
+		"llama-3.1-8b-instant",
+		"llama-3.3-70b-versatile",
+		"gemma2-9b-it",
+	],
+	"github-models": [
+		"gpt-4o-mini",
+		"phi-3.5-mini",
+		"llama-2-7b",
 	],
 }
 
@@ -45,7 +60,9 @@ _RUNTIME_STATUS: Dict[str, Dict[str, Any]] = {
 
 def set_runtime_status(scope: str, provider: str, data: Dict[str, Any]) -> None:
 	bucket = _RUNTIME_STATUS.setdefault(scope, {})
-	bucket[provider] = data
+	payload = dict(data)
+	payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+	bucket[provider] = payload
 
 
 def get_runtime_status(scope: str, provider: str) -> Dict[str, Any]:
@@ -92,15 +109,30 @@ def get_available_models(provider: str, kind: str) -> List[str]:
 		except Exception:
 			return DEFAULT_LLM_MODELS["google"] if kind == "llm" else DEFAULT_EMBEDDING_MODELS["google"]
 
-	if provider == "azure":
-		if kind == "llm":
-			return _csv_env_list("AZURE_OPENAI_CHAT_DEPLOYMENTS") or DEFAULT_LLM_MODELS["azure"]
-		return _csv_env_list("AZURE_OPENAI_EMBEDDING_DEPLOYMENTS") or DEFAULT_EMBEDDING_MODELS["azure"]
-
 	if provider == "huggingface":
 		if kind == "llm":
 			return _csv_env_list("HF_LLM_MODELS") or DEFAULT_LLM_MODELS["huggingface"]
 		return _csv_env_list("HF_EMBEDDING_MODELS") or DEFAULT_EMBEDDING_MODELS["huggingface"]
+
+	if provider == "cohere":
+		if kind == "llm":
+			return []
+		return _csv_env_list("COHERE_EMBEDDING_MODELS") or DEFAULT_EMBEDDING_MODELS["cohere"]
+
+	if provider == "together":
+		if kind == "llm":
+			return []
+		return _csv_env_list("TOGETHER_EMBEDDING_MODELS") or DEFAULT_EMBEDDING_MODELS["together"]
+
+	if provider == "groq":
+		if kind == "llm":
+			return _csv_env_list("GROQ_LLM_MODELS") or DEFAULT_LLM_MODELS["groq"]
+		return []
+
+	if provider == "github-models":
+		if kind == "llm":
+			return _csv_env_list("GITHUB_MODELS_LLM_MODELS") or DEFAULT_LLM_MODELS["github-models"]
+		return []
 
 	if kind == "llm":
 		return []

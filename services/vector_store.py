@@ -11,7 +11,8 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from core.config import set_runtime_status
 
 CHROMA_GOOGLE_DIR = "./data/chroma_db_google"
-CHROMA_AZURE_DIR = "./data/chroma_db_azure"
+CHROMA_COHERE_DIR = "./data/chroma_db_cohere"
+CHROMA_TOGETHER_DIR = "./data/chroma_db_together"
 CHROMA_HF_DIR = "./data/chroma_db_hf"
 CHROMA_LOCAL_DIR = "./data/chroma_db_local"
 EMBEDDING_BACKEND_DIR = "./data"
@@ -28,6 +29,21 @@ _RESOLVED_EMBEDDING_MODEL: Optional[str] = None
 def _backend_file(provider: str) -> str:
     safe_provider = provider.lower().strip()
     return os.path.join(EMBEDDING_BACKEND_DIR, f"_embedding_backend_{safe_provider}.txt")
+
+
+def _validate_vector(vector: List[float], provider: str) -> List[float]:
+    if not isinstance(vector, list) or not vector:
+        raise RuntimeError(f"{provider} returned an empty embedding vector.")
+    cleaned = [float(x) for x in vector]
+    if not cleaned:
+        raise RuntimeError(f"{provider} returned an invalid embedding vector.")
+    return cleaned
+
+
+def _validate_vectors(vectors: List[List[float]], provider: str) -> List[List[float]]:
+    if not isinstance(vectors, list) or not vectors:
+        raise RuntimeError(f"{provider} returned empty embedding results.")
+    return [_validate_vector(v, provider) for v in vectors]
 
 
 class LocalHashEmbeddings(Embeddings):
@@ -59,47 +75,6 @@ class LocalHashEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> List[float]:
         return self._text_to_vector(text)
-
-
-class AzureOpenAIEmbeddings(Embeddings):
-    def __init__(self, deployment: str):
-        self.deployment = deployment
-        self.endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
-        self.api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY", "")
-        self.api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-        if not self.endpoint or not self.api_key:
-            raise RuntimeError("Azure OpenAI credentials are missing. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY.")
-
-    def _request_embeddings(self, texts: List[str]) -> List[List[float]]:
-        url = (
-            f"{self.endpoint}/openai/deployments/{self.deployment}/embeddings"
-            f"?api-version={self.api_version}"
-        )
-        headers = {
-            "api-key": self.api_key,
-            "Content-Type": "application/json",
-        }
-        response = requests.post(url, headers=headers, json={"input": texts}, timeout=60)
-        set_runtime_status(
-            "embedding",
-            "azure",
-            {
-                "remaining_requests": response.headers.get("x-ratelimit-remaining-requests", "unknown"),
-                "remaining_tokens": response.headers.get("x-ratelimit-remaining-tokens", "unknown"),
-                "status": "ok" if response.ok else "error",
-            },
-        )
-        response.raise_for_status()
-        data = response.json().get("data", [])
-        data = sorted(data, key=lambda x: x.get("index", 0))
-        return [item.get("embedding", []) for item in data]
-
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self._request_embeddings(texts)
-
-    def embed_query(self, text: str) -> List[float]:
-        vectors = self._request_embeddings([text])
-        return vectors[0] if vectors else []
 
 
 class HuggingFaceEmbeddings(Embeddings):
@@ -147,13 +122,113 @@ class HuggingFaceEmbeddings(Embeddings):
             },
         )
         response.raise_for_status()
-        return self._to_vector(response.json())
+        return _validate_vector(self._to_vector(response.json()), "huggingface")
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return [self._request_embedding(text) for text in texts]
 
     def embed_query(self, text: str) -> List[float]:
         return self._request_embedding(text)
+
+
+class CohereEmbeddings(Embeddings):
+    def __init__(self, model: str):
+        self.model = model
+        self.api_key = os.getenv("COHERE_API_KEY", "")
+        if not self.api_key:
+            raise RuntimeError("Cohere API key is missing. Set COHERE_API_KEY.")
+
+    def _request_embeddings(self, texts: List[str], input_type: str) -> List[List[float]]:
+        url = "https://api.cohere.com/v1/embed"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "texts": texts,
+            "model": self.model,
+            "input_type": input_type,
+            "embedding_types": ["float"],
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
+        set_runtime_status(
+            "embedding",
+            "cohere",
+            {
+                "status": "ok" if response.ok else "error",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        embeddings = data.get("embeddings")
+        # Cohere response formats vary by API/version/model:
+        # 1) embeddings: [[...], [...]]
+        # 2) embeddings: {"float": [[...], [...]]}
+        # 3) embeddings_by_type: {"float": [[...], [...]]}
+        if isinstance(embeddings, list):
+            vectors = [[float(x) for x in row] for row in embeddings]
+            return _validate_vectors(vectors, "cohere")
+        if isinstance(embeddings, dict):
+            float_embeddings = embeddings.get("float")
+            if isinstance(float_embeddings, list):
+                vectors = [[float(x) for x in row] for row in float_embeddings]
+                return _validate_vectors(vectors, "cohere")
+        embeddings_by_type = data.get("embeddings_by_type", {})
+        if isinstance(embeddings_by_type, dict):
+            float_embeddings = embeddings_by_type.get("float")
+            if isinstance(float_embeddings, list):
+                vectors = [[float(x) for x in row] for row in float_embeddings]
+                return _validate_vectors(vectors, "cohere")
+        error_hint = data.get("message") if isinstance(data, dict) else None
+        raise RuntimeError(f"cohere response did not include embeddings. {error_hint or ''}".strip())
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self._request_embeddings(texts, input_type="search_document")
+
+    def embed_query(self, text: str) -> List[float]:
+        vectors = self._request_embeddings([text], input_type="search_query")
+        return vectors[0] if vectors else []
+
+
+class TogetherAIEmbeddings(Embeddings):
+    def __init__(self, model: str):
+        self.model = model
+        self.api_key = os.getenv("TOGETHER_API_KEY", "")
+        if not self.api_key:
+            raise RuntimeError("Together AI API key is missing. Set TOGETHER_API_KEY.")
+
+    def _request_embeddings(self, texts: List[str]) -> List[List[float]]:
+        url = "https://api.together.xyz/v1/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "input": texts,
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
+        set_runtime_status(
+            "embedding",
+            "together",
+            {
+                "status": "ok" if response.ok else "error",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        rows = data.get("data", [])
+        if isinstance(rows, list):
+            vectors = [item.get("embedding", []) for item in rows if isinstance(item, dict)]
+            return _validate_vectors(vectors, "together")
+        raise RuntimeError("together response did not include embeddings.")
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self._request_embeddings(texts)
+
+    def embed_query(self, text: str) -> List[float]:
+        vectors = self._request_embeddings([text])
+        return vectors[0] if vectors else []
 
 
 def _is_quota_error(error_msg: str) -> bool:
@@ -228,8 +303,10 @@ def _persist_dir_for_provider(provider: str) -> str:
     p = provider.lower().strip()
     if p == "google":
         return CHROMA_GOOGLE_DIR
-    if p == "azure":
-        return CHROMA_AZURE_DIR
+    if p == "cohere":
+        return CHROMA_COHERE_DIR
+    if p == "together":
+        return CHROMA_TOGETHER_DIR
     if p == "huggingface":
         return CHROMA_HF_DIR
     return CHROMA_LOCAL_DIR
@@ -239,9 +316,12 @@ def _embedding_for_provider(provider: str, model: Optional[str]) -> Embeddings:
     p = provider.lower().strip()
     if p == "google":
         return _get_google_embeddings(preferred_model=model)
-    if p == "azure":
-        deployment = model or os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
-        return AzureOpenAIEmbeddings(deployment=deployment)
+    if p == "cohere":
+        cohere_model = model or os.getenv("COHERE_EMBEDDING_MODEL", "embed-english-v3.0")
+        return CohereEmbeddings(model=cohere_model)
+    if p == "together":
+        together_model = model or os.getenv("TOGETHER_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+        return TogetherAIEmbeddings(model=together_model)
     if p == "huggingface":
         hf_model = model or os.getenv("HF_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
         return HuggingFaceEmbeddings(model=hf_model)
@@ -254,7 +334,8 @@ def save_to_chroma(chunks: List[Document], provider: str = "google", model: Opti
         raise ValueError("No chunks provided for vectorization.")
 
     os.makedirs(CHROMA_GOOGLE_DIR, exist_ok=True)
-    os.makedirs(CHROMA_AZURE_DIR, exist_ok=True)
+    os.makedirs(CHROMA_COHERE_DIR, exist_ok=True)
+    os.makedirs(CHROMA_TOGETHER_DIR, exist_ok=True)
     os.makedirs(CHROMA_HF_DIR, exist_ok=True)
     os.makedirs(CHROMA_LOCAL_DIR, exist_ok=True)
 
@@ -274,7 +355,7 @@ def save_to_chroma(chunks: List[Document], provider: str = "google", model: Opti
         return vectorstore
     except Exception as exc:
         error_msg = str(exc)
-        if _is_quota_error(error_msg) or "not found" in error_msg.lower() or "unsupported" in error_msg.lower() or "401" in error_msg.lower():
+        try:
             local_embeddings = LocalHashEmbeddings()
             vectorstore = Chroma.from_documents(
                 documents=chunks,
@@ -288,24 +369,44 @@ def save_to_chroma(chunks: List[Document], provider: str = "google", model: Opti
                 {"status": "degraded", "backend": "local", "reason": str(exc)},
             )
             return vectorstore
-        raise RuntimeError(f"Failed to write vector database: {exc}") from exc
+        except Exception as local_exc:
+            raise RuntimeError(
+                f"Failed to write vector database with provider '{selected_provider}': {error_msg}. "
+                f"Local fallback also failed: {local_exc}"
+            ) from local_exc
 
 
 def get_vectorstore(provider: str = "google", model: Optional[str] = None) -> Chroma:
     """Load existing Chroma vector store from local persistent path."""
     os.makedirs(CHROMA_GOOGLE_DIR, exist_ok=True)
-    os.makedirs(CHROMA_AZURE_DIR, exist_ok=True)
+    os.makedirs(CHROMA_COHERE_DIR, exist_ok=True)
+    os.makedirs(CHROMA_TOGETHER_DIR, exist_ok=True)
     os.makedirs(CHROMA_HF_DIR, exist_ok=True)
     os.makedirs(CHROMA_LOCAL_DIR, exist_ok=True)
 
     selected_provider = provider.lower().strip()
     backend = _read_embedding_backend(selected_provider)
-    if backend == "local-hash-v1":
-        embedding_function: Embeddings = LocalHashEmbeddings()
+    try:
+        if backend == "local-hash-v1":
+            embedding_function: Embeddings = LocalHashEmbeddings()
+            persist_directory = CHROMA_LOCAL_DIR
+        else:
+            embedding_function = _embedding_for_provider(selected_provider, model)
+            persist_directory = _persist_dir_for_provider(selected_provider)
+    except Exception as exc:
+        # Retrieval must remain available; degrade to local embeddings when provider embedding is unavailable.
+        embedding_function = LocalHashEmbeddings()
         persist_directory = CHROMA_LOCAL_DIR
-    else:
-        embedding_function = _embedding_for_provider(selected_provider, model)
-        persist_directory = _persist_dir_for_provider(selected_provider)
+        _save_backend_for_provider(selected_provider, "local-hash-v1")
+        set_runtime_status(
+            "embedding",
+            selected_provider,
+            {
+                "status": "degraded",
+                "backend": "local",
+                "reason": str(exc),
+            },
+        )
 
     return Chroma(
         persist_directory=persist_directory,
