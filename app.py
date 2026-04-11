@@ -1,7 +1,9 @@
 import streamlit as st
 import os
 import hashlib
+from pathlib import Path
 from dotenv import load_dotenv
+import streamlit.components.v1 as components
 
 load_dotenv()
 
@@ -17,6 +19,20 @@ from core.config import (
 
 st.set_page_config(page_title="企業 AI 知識庫助手", layout="centered")
 st.title("📄 企業級 RAG 知識庫 MVP")
+
+_LOCAL_STORAGE_BRIDGE = components.declare_component(
+    "local_storage_bridge",
+    path=str(Path(__file__).parent / "components" / "local_storage_bridge"),
+)
+
+_API_KEY_FIELDS = {
+    "google_api_key": "GOOGLE_API_KEY",
+    "cohere_api_key": "COHERE_API_KEY",
+    "together_api_key": "TOGETHER_API_KEY",
+    "hf_api_key": "HF_API_KEY",
+    "groq_api_key": "GROQ_API_KEY",
+    "github_models_token": "GITHUB_MODELS_TOKEN",
+}
 
 
 def _ordered_options(all_options, preferred_order):
@@ -57,6 +73,43 @@ def _mask_key_present(env_name):
     return bool(os.getenv(env_name, "").strip())
 
 
+def _clear_embedding_model_on_provider_change():
+    if "embedding_model" in st.session_state:
+        del st.session_state["embedding_model"]
+
+
+def _clear_llm_model_on_provider_change():
+    if "llm_model" in st.session_state:
+        del st.session_state["llm_model"]
+
+
+def _apply_api_keys_from_session_to_env():
+    for field_key, env_key in _API_KEY_FIELDS.items():
+        value = st.session_state.get(f"ui_{field_key}", "")
+        if value:
+            os.environ[env_key] = value
+
+
+def _sync_api_keys_from_local_storage():
+    stored_values = _LOCAL_STORAGE_BRIDGE(
+        namespace="api_keys",
+        keys=list(_API_KEY_FIELDS.keys()),
+        key="api_keys_reader",
+        default={},
+    )
+    if isinstance(stored_values, dict):
+        for field_key, env_key in _API_KEY_FIELDS.items():
+            ui_key = f"ui_{field_key}"
+            value = stored_values.get(field_key, "")
+            if value and not st.session_state.get(ui_key):
+                st.session_state[ui_key] = value
+            if value:
+                os.environ[env_key] = value
+
+
+_sync_api_keys_from_local_storage()
+
+
 def _format_runtime_status(status):
     if not status:
         return "尚無執行資料（請先完成一次索引或問答）"
@@ -90,6 +143,59 @@ def _format_runtime_status(status):
 
 with st.sidebar:
     st.header("模型設定")
+
+    with st.expander("API Key 快速設定（本次會話）", expanded=False):
+        st.text_input("Google API Key", type="password", key="ui_google_api_key")
+        st.text_input("Cohere API Key", type="password", key="ui_cohere_api_key")
+        st.text_input("Together API Key", type="password", key="ui_together_api_key")
+        st.text_input("HuggingFace API Key", type="password", key="ui_hf_api_key")
+        st.text_input("Groq API Key", type="password", key="ui_groq_api_key")
+        st.text_input("GitHub Models Token", type="password", key="ui_github_models_token")
+
+        save_browser = st.button("儲存到瀏覽器 localStorage", use_container_width=True)
+        apply_session = st.button("僅套用本次執行", use_container_width=True)
+        clear_browser = st.button("清除瀏覽器已儲存 API Key", use_container_width=True)
+
+        if save_browser:
+            values = {
+                field_key: st.session_state.get(f"ui_{field_key}", "")
+                for field_key in _API_KEY_FIELDS
+            }
+            _LOCAL_STORAGE_BRIDGE(
+                namespace="api_keys",
+                keys=list(_API_KEY_FIELDS.keys()),
+                writeValues=values,
+                key="api_keys_writer",
+                default={},
+            )
+            _apply_api_keys_from_session_to_env()
+            st.success("已儲存到 browser localStorage，並套用到目前執行環境。")
+
+        if apply_session:
+            _apply_api_keys_from_session_to_env()
+            st.success("已套用到目前執行環境（未改動 .env）。")
+
+        if clear_browser:
+            _LOCAL_STORAGE_BRIDGE(
+                namespace="api_keys",
+                keys=list(_API_KEY_FIELDS.keys()),
+                clearKeys=list(_API_KEY_FIELDS.keys()),
+                key="api_keys_clearer",
+                default={},
+            )
+            for field_key, env_key in _API_KEY_FIELDS.items():
+                st.session_state[f"ui_{field_key}"] = ""
+                os.environ.pop(env_key, None)
+            st.success("已清除瀏覽器 localStorage 內的 API Key。")
+
+        st.caption(
+            "儲存透明說明：按『儲存到瀏覽器 localStorage』後，金鑰儲存在瀏覽器端 localStorage，"
+            "不會寫入專案檔案（如 .env）與資料庫。"
+        )
+        st.caption(
+            "localStorage 位置：Browser DevTools > Application > Local Storage。"
+            "鍵名格式：rag_project.api_keys.<provider_key>"
+        )
 
     with st.expander("如何選模型（建議流程）", expanded=False):
         st.markdown(
@@ -129,6 +235,7 @@ with st.sidebar:
         embedding_provider_options,
         index=embedding_provider_options.index(default_embedding_provider) if default_embedding_provider else 0,
         key="embedding_provider",
+        on_change=_clear_embedding_model_on_provider_change,
     )
     embedding_model_options = get_available_models(embedding_provider, "embedding")
     if "embedding_model" in st.session_state and st.session_state["embedding_model"] not in embedding_model_options:
@@ -153,6 +260,7 @@ with st.sidebar:
         llm_provider_options,
         index=llm_provider_options.index(default_llm_provider) if default_llm_provider else 0,
         key="llm_provider",
+        on_change=_clear_llm_model_on_provider_change,
     )
     llm_model_options = get_available_models(llm_provider, "llm")
     if "llm_model" in st.session_state and st.session_state["llm_model"] not in llm_model_options:
@@ -201,25 +309,28 @@ if uploaded_file:
 
     save_path = f"data/uploads/{uploaded_file.name}"
     if needs_reindex:
-        with open(save_path, "wb") as f:
-            f.write(file_bytes)
-
-        with st.status("正在處理文件...", expanded=True) as status:
-            st.write("解析 PDF 中...")
-            chunks = process_pdf(save_path)
-            st.write(f"切分完成，共 {len(chunks)} 個區塊。")
-
-            st.write("寫入向量資料庫...")
-            save_to_chroma(
-                chunks,
-                provider=embedding_provider,
-                model=embedding_model,
-            )
-            status.update(label="文件處理完成！", state="complete", expanded=False)
-
-        st.session_state["indexed_signature"] = index_signature
+        st.info("檔案或 Embedding 設定已變更，請按下『執行 Embedding』重建索引。")
     else:
         st.caption("使用既有索引（未重新向量化）：檔案內容與 Embedding 設定未變更。")
+
+    do_embedding = st.button("執行 Embedding", type="primary", use_container_width=True)
+    if do_embedding:
+        progress = st.progress(0, text="開始處理文件...")
+        with open(save_path, "wb") as f:
+            f.write(file_bytes)
+        progress.progress(20, text="已儲存檔案，準備解析 PDF...")
+
+        chunks = process_pdf(save_path)
+        progress.progress(55, text=f"PDF 解析完成，切分 {len(chunks)} 個區塊...")
+
+        save_to_chroma(
+            chunks,
+            provider=embedding_provider,
+            model=embedding_model,
+        )
+        progress.progress(100, text="Embedding 與向量索引完成。")
+        st.session_state["indexed_signature"] = index_signature
+        st.success("索引建立完成，現在可以開始提問。")
 
     # 對話區
     if "messages" not in st.session_state:
@@ -229,7 +340,12 @@ if uploaded_file:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("請問關於這份文件的任何問題？"):
+    indexed_signature = st.session_state.get("indexed_signature")
+    current_ready = indexed_signature == index_signature
+    if not current_ready:
+        st.warning("目前尚未完成此檔案/設定的索引，請先按『執行 Embedding』。")
+
+    if prompt := st.chat_input("請問關於這份文件的任何問題？", disabled=not current_ready):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)

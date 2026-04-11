@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      const PREFIX = "rag_project.";
+      const RENDER_EVENT = "streamlit:render";
+      const READY_EVENT = "streamlit:componentReady";
+      const VALUE_EVENT = "streamlit:setComponentValue";
+      const HEIGHT_EVENT = "streamlit:setFrameHeight";
+
+      function fullKey(namespace, key) {
+        return `${PREFIX}${namespace}.${key}`;
+      }
+
+      function post(type, extra = {}) {
+        window.parent.postMessage(
+          {
+            isStreamlitMessage: true,
+            type,
+            ...extra,
+          },
+          "*"
+        );
+      }
+
+      function readFromLocalStorage(namespace, keys) {
+        const result = {};
+        for (const key of keys) {
+          result[key] = window.localStorage.getItem(fullKey(namespace, key)) || "";
+        }
+        return result;
+      }
+
+      function writeToLocalStorage(namespace, values) {
+        for (const [k, v] of Object.entries(values || {})) {
+          if (typeof v !== "string") {
+            continue;
+          }
+          window.localStorage.setItem(fullKey(namespace, k), v);
+        }
+      }
+
+      function clearFromLocalStorage(namespace, keys) {
+        for (const key of keys) {
+          window.localStorage.removeItem(fullKey(namespace, key));
+        }
+      }
+
+      function onRender(event) {
+        const data = event.data || {};
+        if (!data.isStreamlitMessage || data.type !== RENDER_EVENT) {
+          return;
+        }
+
+        const args = data.args || {};
+        const namespace = args.namespace || "default";
+        const keys = Array.isArray(args.keys) ? args.keys : [];
+
+        if (args.writeValues) {
+          writeToLocalStorage(namespace, args.writeValues);
+        }
+
+        if (args.clearKeys) {
+          clearFromLocalStorage(namespace, args.clearKeys);
+        }
+
+        const values = readFromLocalStorage(namespace, keys);
+        post(VALUE_EVENT, { value: values });
+        post(HEIGHT_EVENT, { height: 0 });
+      }
+
+      window.addEventListener("message", onRender);
+      post(READY_EVENT, { apiVersion: 1 });
+      post(HEIGHT_EVENT, { height: 0 });
+    </script>
+  </body>
+</html>
