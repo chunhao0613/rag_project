@@ -1,1 +1,1 @@
-local-hash-v1
+cohere:embed-multilingual-v3.0

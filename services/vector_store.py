@@ -2,6 +2,8 @@
 import os
 import math
 import re
+import json
+import shutil
 import requests
 
 from langchain_chroma import Chroma
@@ -16,6 +18,7 @@ CHROMA_TOGETHER_DIR = "./data/chroma_db_together"
 CHROMA_HF_DIR = "./data/chroma_db_hf"
 CHROMA_LOCAL_DIR = "./data/chroma_db_local"
 EMBEDDING_BACKEND_DIR = "./data"
+EMBEDDING_REGISTRY_FILE = os.path.join(EMBEDDING_BACKEND_DIR, "_embedding_registry.json")
 EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL")
 FALLBACK_EMBEDDING_MODELS = [
     "models/gemini-embedding-001",
@@ -29,6 +32,112 @@ _RESOLVED_EMBEDDING_MODEL: Optional[str] = None
 def _backend_file(provider: str) -> str:
     safe_provider = provider.lower().strip()
     return os.path.join(EMBEDDING_BACKEND_DIR, f"_embedding_backend_{safe_provider}.txt")
+
+
+def _registry_key(file_hash: str, provider: str, model: Optional[str]) -> str:
+    model_name = (model or "default").strip() or "default"
+    return f"{provider.lower().strip()}:{model_name}:{file_hash}"
+
+
+def _load_embedding_registry() -> dict:
+    if not os.path.exists(EMBEDDING_REGISTRY_FILE):
+        return {}
+    try:
+        with open(EMBEDDING_REGISTRY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_embedding_registry(registry: dict) -> None:
+    os.makedirs(EMBEDDING_BACKEND_DIR, exist_ok=True)
+    with open(EMBEDDING_REGISTRY_FILE, "w", encoding="utf-8") as f:
+        json.dump(registry, f, ensure_ascii=True, indent=2)
+
+
+def is_document_embedded(file_hash: str, provider: str, model: Optional[str]) -> bool:
+    """Check whether this file hash has been embedded for a provider+model."""
+    if not file_hash:
+        return False
+    key = _registry_key(file_hash, provider, model)
+    registry = _load_embedding_registry()
+    return bool(registry.get(key, {}).get("embedded"))
+
+
+def mark_document_embedded(
+    file_hash: str,
+    provider: str,
+    model: Optional[str],
+    file_name: Optional[str],
+    chunk_count: int,
+) -> None:
+    if not file_hash:
+        return
+    key = _registry_key(file_hash, provider, model)
+    registry = _load_embedding_registry()
+    registry[key] = {
+        "embedded": True,
+        "file_hash": file_hash,
+        "provider": provider.lower().strip(),
+        "model": model or "default",
+        "file_name": file_name or "",
+        "chunk_count": int(chunk_count),
+    }
+    _save_embedding_registry(registry)
+
+
+def clear_embedding_cache(provider: str, model: Optional[str] = None) -> dict:
+    """Clear persisted embedding cache for a provider/model.
+
+    Returns a summary dictionary with removed registry entries and whether
+    vector directory was removed.
+    """
+    selected_provider = provider.lower().strip()
+    model_name = (model or "").strip()
+
+    registry = _load_embedding_registry()
+    kept = {}
+    removed = 0
+
+    for key, value in registry.items():
+        if not isinstance(value, dict):
+            kept[key] = value
+            continue
+        key_provider = str(value.get("provider", "")).lower().strip()
+        key_model = str(value.get("model", "")).strip()
+        provider_match = key_provider == selected_provider
+        model_match = (not model_name) or (key_model == model_name)
+        if provider_match and model_match:
+            removed += 1
+            continue
+        kept[key] = value
+
+    if removed > 0:
+        _save_embedding_registry(kept)
+
+    persist_directory = _persist_dir_for_provider(selected_provider)
+    vector_dir_removed = False
+    if os.path.isdir(persist_directory):
+        shutil.rmtree(persist_directory, ignore_errors=True)
+        os.makedirs(persist_directory, exist_ok=True)
+        vector_dir_removed = True
+
+    backend_file = _backend_file(selected_provider)
+    if os.path.exists(backend_file):
+        try:
+            os.remove(backend_file)
+        except OSError:
+            pass
+
+    return {
+        "provider": selected_provider,
+        "model": model_name or "all-models",
+        "removed_registry_entries": removed,
+        "vector_dir_removed": vector_dir_removed,
+    }
 
 
 def _validate_vector(vector: List[float], provider: str) -> List[float]:
@@ -328,7 +437,13 @@ def _embedding_for_provider(provider: str, model: Optional[str]) -> Embeddings:
     return LocalHashEmbeddings()
 
 
-def save_to_chroma(chunks: List[Document], provider: str = "google", model: Optional[str] = None) -> Chroma:
+def save_to_chroma(
+    chunks: List[Document],
+    provider: str = "google",
+    model: Optional[str] = None,
+    file_hash: Optional[str] = None,
+    file_name: Optional[str] = None,
+) -> Chroma:
     """Save chunked documents to local Chroma and return the vector store."""
     if not chunks:
         raise ValueError("No chunks provided for vectorization.")
@@ -352,6 +467,14 @@ def save_to_chroma(chunks: List[Document], provider: str = "google", model: Opti
         model_name = model or _RESOLVED_EMBEDDING_MODEL or EMBEDDING_MODEL or "default"
         _save_backend_for_provider(selected_provider, f"{selected_provider}:{model_name}")
         set_runtime_status("embedding", selected_provider, {"status": "ok", "backend": selected_provider})
+        if file_hash:
+            mark_document_embedded(
+                file_hash=file_hash,
+                provider=selected_provider,
+                model=model_name,
+                file_name=file_name,
+                chunk_count=len(chunks),
+            )
         return vectorstore
     except Exception as exc:
         error_msg = str(exc)

@@ -1,24 +1,9 @@
 {
 	"nodes":[
-		{"id":"0c79a6f2ec388708","type":"text","text":"使用者輸入文本","x":-140,"y":-160,"width":250,"height":60},
-		{"id":"0c103e92f7e03c55","type":"text","text":"標記化","x":-140,"y":0,"width":250,"height":57},
-		{"id":"dff5f8192c0cfe45","type":"text","text":"向量化","x":-140,"y":160,"width":250,"height":60},
-		{"id":"4003d6c3b6c5cafb","type":"text","text":"核心運算層","x":-139,"y":327,"width":250,"height":60},
-		{"id":"c5cc07d792535d14","type":"file","file":"AI/AI運算層.canvas","x":-214,"y":440,"width":400,"height":400},
-		{"id":"c01d789855b66467","x":-140,"y":913,"width":250,"height":60,"type":"text","text":"輸出機率分布"},
-		{"id":"4606cac946448c40","x":-140,"y":1080,"width":250,"height":60,"type":"text","text":"預測下一個標記"},
-		{"id":"0a61da2b34bb8701","x":-139,"y":1231,"width":250,"height":60,"type":"text","text":"檢查是否為停止符號"},
-		{"id":"bc36ad205e2b04e8","x":-139,"y":1379,"width":250,"height":60,"type":"text","text":"最終輸出完整回應文本"}
+		{"id":"e2dc308380d8924d","type":"text","text":"input","x":20,"y":-80,"width":250,"height":60},
+		{"id":"c47322fd2cdcdb6e","x":-55,"y":40,"width":400,"height":400,"type":"file","file":"AI/Preprocessing&Tokenization.canvas"}
 	],
 	"edges":[
-		{"id":"79eade06528d1947","fromNode":"0c79a6f2ec388708","fromSide":"bottom","toNode":"0c103e92f7e03c55","toSide":"top"},
-		{"id":"6a11afe7fb7f28f5","fromNode":"0c103e92f7e03c55","fromSide":"bottom","toNode":"dff5f8192c0cfe45","toSide":"top"},
-		{"id":"ee8312e59ccd2bf6","fromNode":"dff5f8192c0cfe45","fromSide":"bottom","toNode":"4003d6c3b6c5cafb","toSide":"top"},
-		{"id":"a29b1790bb469917","fromNode":"4003d6c3b6c5cafb","fromSide":"bottom","toNode":"c5cc07d792535d14","toSide":"top"},
-		{"id":"bf3026a9624967d2","fromNode":"c5cc07d792535d14","fromSide":"bottom","toNode":"c01d789855b66467","toSide":"top"},
-		{"id":"3667c71a6ea4c733","fromNode":"c01d789855b66467","fromSide":"bottom","toNode":"4606cac946448c40","toSide":"top"},
-		{"id":"4d9425861860afe6","fromNode":"4606cac946448c40","fromSide":"bottom","toNode":"0a61da2b34bb8701","toSide":"top"},
-		{"id":"68489b42cb8b0030","fromNode":"0a61da2b34bb8701","fromSide":"bottom","toNode":"bc36ad205e2b04e8","toSide":"top"},
-		{"id":"a2b701e28f85fda1","fromNode":"0a61da2b34bb8701","fromSide":"right","toNode":"4606cac946448c40","toSide":"right"}
+		{"id":"67d6db2c6060e6d2","fromNode":"e2dc308380d8924d","fromSide":"bottom","toNode":"c47322fd2cdcdb6e","toSide":"top"}
 	]
 }

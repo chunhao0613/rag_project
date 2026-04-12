@@ -1,6 +1,6 @@
 {
 	"nodes":[
-		{"id":"0fae54a338ce4297","type":"text","text":"a. 位置編碼\n賦予每個token順序資訊","x":-358,"y":-232,"width":378,"height":60},
+		{"id":"0fae54a338ce4297","type":"text","text":"Embedding & Positional Encoding","x":-358,"y":-232,"width":378,"height":60},
 		{"id":"53e560c60147b7be","type":"text","text":"b. 自注意力機制\n⭐進行矩陣相乘，計算token間的關聯權重","x":-358,"y":-120,"width":378,"height":60},
 		{"id":"1bc790928db65fa9","type":"text","text":"c.前饋神經網路\n提取深層特徵，強化模型對語意的預測能力","x":-358,"y":0,"width":378,"height":60}
 	],

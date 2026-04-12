@@ -8,7 +8,12 @@ import streamlit.components.v1 as components
 load_dotenv()
 
 from core.document_processor import process_pdf
-from services.vector_store import save_to_chroma, get_vectorstore
+from services.vector_store import (
+    save_to_chroma,
+    get_vectorstore,
+    is_document_embedded,
+    clear_embedding_cache,
+)
 from services.llm_service import get_answer
 from core.config import (
     EMBEDDING_PROVIDERS,
@@ -279,6 +284,7 @@ with st.sidebar:
         st.info("中文文件建議改用 embed-multilingual-v3.0 以提升檢索命中率。")
 
     st.caption("Quota 顯示說明：Google 無法預先查可用額度，僅在 429 時顯示重試資訊。")
+    st.caption("Replit 可能休眠；喚醒後若向量快取遺失，請重新執行 Embedding。")
 
     embedding_status = get_runtime_status("embedding", embedding_provider)
     llm_status = get_runtime_status("llm", llm_provider)
@@ -289,6 +295,22 @@ with st.sidebar:
     else:
         st.subheader("Embedding 狀態")
         st.text(_format_runtime_status(embedding_status))
+
+    clear_selected_embedding_cache = st.button(
+        "清除目前 Embedding 快取（Provider + Model）",
+        use_container_width=True,
+    )
+    if clear_selected_embedding_cache:
+        summary = clear_embedding_cache(
+            provider=embedding_provider,
+            model=embedding_model,
+        )
+        st.session_state.pop("indexed_signature", None)
+        st.warning(
+            f"已清除 {summary['provider']} / {summary['model']} 快取，"
+            f"移除 {summary['removed_registry_entries']} 筆索引紀錄，"
+            f"向量庫目錄重置: {'是' if summary['vector_dir_removed'] else '否'}。"
+        )
 
     if llm_status:
         st.subheader("LLM 狀態")
@@ -319,16 +341,35 @@ if uploaded_file:
         with open(save_path, "wb") as f:
             f.write(file_bytes)
         progress.progress(20, text="已儲存檔案，準備解析 PDF...")
+        cache_hit = is_document_embedded(
+            file_hash=file_hash,
+            provider=embedding_provider,
+            model=embedding_model,
+        )
 
         chunks = process_pdf(save_path)
         progress.progress(55, text=f"PDF 解析完成，切分 {len(chunks)} 個區塊...")
 
-        save_to_chroma(
-            chunks,
-            provider=embedding_provider,
-            model=embedding_model,
-        )
-        progress.progress(100, text="Embedding 與向量索引完成。")
+        if cache_hit:
+            progress.progress(100, text="偵測到已存在索引，已採用本地切分內容並略過模型嵌入。")
+            st.info("此文件已完成過相同 Embedding 設定，已直接重用既有向量索引。")
+        else:
+            for idx, chunk in enumerate(chunks):
+                chunk.metadata = dict(chunk.metadata or {})
+                chunk.metadata["source_file"] = uploaded_file.name
+                chunk.metadata["file_hash"] = file_hash
+                chunk.metadata["embedding_provider"] = embedding_provider
+                chunk.metadata["embedding_model"] = embedding_model or "default"
+                chunk.metadata["chunk_index"] = idx
+
+            save_to_chroma(
+                chunks,
+                provider=embedding_provider,
+                model=embedding_model,
+                file_hash=file_hash,
+                file_name=uploaded_file.name,
+            )
+            progress.progress(100, text="Embedding 與向量索引完成。")
         st.session_state["indexed_signature"] = index_signature
         st.success("索引建立完成，現在可以開始提問。")
 

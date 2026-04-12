@@ -1,0 +1,5 @@
+modules = ["python-3.11"]
+run = "streamlit run app.py --server.address 0.0.0.0 --server.port 3000"
+
+[env]
+PYTHONUNBUFFERED = "1"
