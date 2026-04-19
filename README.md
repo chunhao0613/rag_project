@@ -1,4 +1,14 @@
 # RAG 系統 SRE 交付與維運實踐 (SRE Interview MVP)
+## 專案概述
+
+本專案將一個基於大語言模型（LLM）的 Retrieval-Augmented Generation (RAG) 應用，轉化為具備高可用性、可自動化交付且高度可觀測的企業級服務。
+
+專案的核心目標不在於單純實現 RAG 功能。透過標準化的 CI/CD 流程、Kubernetes 容器編排以及完整的監控告警機制，確保系統能夠穩定、安全且高效地迭代與運行。
+
+## 核心責任邊界 (Responsibility Boundaries)
+
+本專案嚴格遵守治理與執行分離的設計原則：
+> **GitLab** 負責准入治理，**Jenkins** 負責建置與部署執行，**Kubernetes 與 Helm** 負責標準化交付，**Prometheus 與 ELK** 負責觀測與告警閉環。
 
 ## 系統架構 (System Architecture)
 <img width="2463" height="2311" alt="未命名绘图 drawio (2)" src="https://github.com/user-attachments/assets/5551009e-d616-4d3f-bd94-08e20b315e25" />
