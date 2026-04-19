@@ -13,6 +13,10 @@
 ## 系統架構 (System Architecture)
 <img width="2463" height="2311" alt="未命名绘图 drawio (2)" src="https://github.com/user-attachments/assets/5551009e-d616-4d3f-bd94-08e20b315e25" />
 
+## 時間進程表
+
+完整的 50 小時每 2 小時區塊執行表請見 [docs/sre_mvp_timeline.md](docs/sre_mvp_timeline.md)。
+
 ## MVP 驗收標準 (Acceptance Criteria)
 
 本專案的成功定義基於以下 6 項硬性指標：
@@ -31,5 +35,12 @@
       * **Metrics**: Prometheus 必須能收集 API 延遲、錯誤率與服務重啟次數。
       * **Logs**: ELK 必須能集中檢索結構化日誌，追蹤跨模組請求脈絡。
       * **Alerts**: Alertmanager 需設定針對高錯誤率與高延遲的具體處置告警。
+
+**驗收判定方式**
+
+* 若能成功從提交變更一路走到部署與觀測，且有明確日誌、指標與回滾證據，則視為通過。
+* 若只能「跑起來」，但無法證明可部署、可觀測、可回滾，則不視為 SRE MVP。
+* 若無法清楚說明每個元件的責任邊界與故障處理方式，則不視為可面試展示版本。
+
 ---
 > *註：本專案依循敏捷開發原則，目前持續迭代完善各項基礎設施與 CI/CD 管線中。*
