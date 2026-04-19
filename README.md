@@ -11,7 +11,7 @@
 > **GitLab** 負責准入治理，**Jenkins** 負責建置與部署執行，**Kubernetes 與 Helm** 負責標準化交付，**Prometheus 與 ELK** 負責觀測與告警閉環。
 
 ## 系統架構 (System Architecture)
-<img width="2463" height="2311" alt="未命名绘图 drawio (2)" src="https://github.com/user-attachments/assets/5551009e-d616-4d3f-bd94-08e20b315e25" />
+<img width="2463" height="2318" alt="未命名绘图 drawio (3)" src="https://github.com/user-attachments/assets/a83742d1-3459-466e-bc12-a3c9994f46d4" />
 
 ## 時間進程表
 
