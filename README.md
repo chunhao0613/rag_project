@@ -15,6 +15,7 @@
 - [50 小時時間進程表](docs/sre_mvp_timeline.md)
 - [細化版進程與面試敘事](docs/sre_mvp_timeline_detailed.md)
 - [完整實作日誌（03~25）](docs/log.md)
+- [01~25 專家級細節筆記（新版）](docs/sre_expert_notes_01_25_new.md)
 - [故障演練與復盤模板](docs/incident_drills.md)
 - [面試彩排包](docs/interview_rehearsal.md)
 
