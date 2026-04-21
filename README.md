@@ -1,4 +1,23 @@
 # RAG 系統 SRE 交付與維運實踐 (SRE Interview MVP)
+
+## 目錄
+
+- [專案概述](#專案概述)
+- [核心責任邊界 (Responsibility Boundaries)](#核心責任邊界-responsibility-boundaries)
+- [系統架構 (System Architecture)](#系統架構-system-architecture)
+- [時間進程表](#時間進程表)
+- [05 階段：最小測試與品質入口（本機）](#05-階段最小測試與品質入口本機)
+- [MVP 驗收標準 (Acceptance Criteria)](#mvp-驗收標準-acceptance-criteria)
+- [驗收判定方式](#驗收判定方式)
+
+### 延伸文件
+
+- [50 小時時間進程表](docs/sre_mvp_timeline.md)
+- [細化版進程與面試敘事](docs/sre_mvp_timeline_detailed.md)
+- [完整實作日誌（03~25）](docs/log.md)
+- [故障演練與復盤模板](docs/incident_drills.md)
+- [面試彩排包](docs/interview_rehearsal.md)
+
 ## 專案概述
 
 本專案將一個基於大語言模型（LLM）的 Retrieval-Augmented Generation (RAG) 應用，轉化為具備高可用性、可自動化交付且高度可觀測的企業級服務。
