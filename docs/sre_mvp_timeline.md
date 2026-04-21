@@ -45,8 +45,8 @@
 | 21 | 40~42h | Prometheus 指標接入 | metrics 抓取配置與核心儀表 | 核心指標可在儀表板看到 |
 | 22 | 42~44h | ELK 日誌接入 | log pipeline 與 Kibana 查詢模板 | 可依 request_id/provider/error_type 查詢 |
 | 23 | 44~46h | Alertmanager 告警 | 3 條告警規則 | 可手動觸發與恢復 |
-| 24 | 46~48h | 故障演練與復盤 | 3 個 incident 劇本與復盤模板 | 每個事件都有根因與修正方案 |
-| 25 | 48~50h | 面試彩排 | 15 分鐘 demo 腳本、10 題追問答案 | 可連續演示完整流程並回答 trade-off |
+| 24 | 46~48h | 故障演練與復盤 | docs/incident_drills.md（3 個 incident 劇本與復盤模板） | 每個事件都有根因與修正方案 |
+| 25 | 48~50h | 面試彩排 | docs/interview_rehearsal.md（15 分鐘 demo 腳本、10 題追問答案） | 可連續演示完整流程並回答 trade-off |
 
 ## 每區塊固定節奏
 

@@ -1,0 +1,37 @@
+replicaCount: 2
+
+image:
+  repository: rag_project-rag-app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 768Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+config:
+  STREAMLIT_SERVER_PORT: "8000"
+  STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+  GOOGLE_CHAT_MODEL: gemini-2.0-flash
+  GOOGLE_EMBEDDING_MODEL: models/gemini-embedding-001
+
+secret:
+  create: true
+  data:
+    GOOGLE_API_KEY: prod-placeholder
+    COHERE_API_KEY: prod-placeholder
+    TOGETHER_API_KEY: prod-placeholder
+    HF_API_KEY: prod-placeholder
+    GROQ_API_KEY: prod-placeholder
+    GITHUB_MODELS_TOKEN: prod-placeholder
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  mountPath: /app/data

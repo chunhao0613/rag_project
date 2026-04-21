@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rag-mvp
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+# NOTE:
+# - 請先複製 secret.template.yaml 為 secret.yaml 並填入真實金鑰
+# - 再把 secret.yaml 加進 resources

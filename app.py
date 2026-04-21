@@ -1,11 +1,106 @@
 import streamlit as st
 import os
 import hashlib
+import json
+import logging
+import socket
+import time
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 from dotenv import load_dotenv
 import streamlit.components.v1 as components
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 load_dotenv()
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
+LOGGER = logging.getLogger("rag_app")
+
+REQUEST_COUNTER = Counter(
+    "rag_requests_total",
+    "Total RAG user actions",
+    ["action", "provider", "status"],
+)
+REQUEST_ERRORS = Counter(
+    "rag_request_errors_total",
+    "Total RAG user action failures",
+    ["action", "provider", "error_type"],
+)
+REQUEST_LATENCY = Histogram(
+    "rag_request_duration_seconds",
+    "RAG user action latency in seconds",
+    ["action"],
+    buckets=(0.1, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 30),
+)
+INDEXED_CHUNKS = Gauge(
+    "rag_indexed_chunks",
+    "Number of chunks currently indexed for the active document",
+)
+INDEXED_DOCUMENTS = Gauge(
+    "rag_indexed_documents",
+    "Number of indexed documents in the active session",
+)
+LAST_EVENT_AT = Gauge(
+    "rag_last_event_unixtime",
+    "Last observed RAG action timestamp",
+)
+
+
+def _ensure_metrics_server() -> None:
+    if st.session_state.get("_metrics_server_started"):
+        return
+
+    metrics_port = int(os.getenv("METRICS_PORT", "8001"))
+    try:
+        start_http_server(metrics_port)
+        st.session_state["_metrics_server_started"] = True
+        _log_event("metrics_server_started", metrics_port=metrics_port)
+    except OSError as exc:
+        st.session_state["_metrics_server_started"] = True
+        _log_event(
+            "metrics_server_start_failed",
+            metrics_port=metrics_port,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+
+
+def _log_event(event: str, **fields) -> None:
+    payload = {
+        "event": event,
+        "component": "rag_app",
+        "host": socket.gethostname(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **fields,
+    }
+    LOGGER.info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _record_success(action: str, provider: str, request_id: str, **fields) -> None:
+    REQUEST_COUNTER.labels(action=action, provider=provider, status="success").inc()
+    LAST_EVENT_AT.set(time.time())
+    _log_event(
+        f"{action}_success",
+        request_id=request_id,
+        provider=provider,
+        **fields,
+    )
+
+
+def _record_failure(action: str, provider: str, request_id: str, exc: Exception, **fields) -> None:
+    error_type = type(exc).__name__
+    REQUEST_COUNTER.labels(action=action, provider=provider, status="error").inc()
+    REQUEST_ERRORS.labels(action=action, provider=provider, error_type=error_type).inc()
+    LAST_EVENT_AT.set(time.time())
+    _log_event(
+        f"{action}_error",
+        request_id=request_id,
+        provider=provider,
+        error_type=error_type,
+        error_message=str(exc),
+        **fields,
+    )
 
 from core.document_processor import process_pdf
 from services.vector_store import (
@@ -24,6 +119,7 @@ from core.config import (
 
 st.set_page_config(page_title="企業 AI 知識庫助手", layout="centered")
 st.title("📄 企業級 RAG 知識庫 MVP")
+_ensure_metrics_server()
 
 _LOCAL_STORAGE_BRIDGE = components.declare_component(
     "local_storage_bridge",
@@ -301,11 +397,24 @@ with st.sidebar:
         use_container_width=True,
     )
     if clear_selected_embedding_cache:
+        request_id = uuid4().hex[:12]
         summary = clear_embedding_cache(
             provider=embedding_provider,
             model=embedding_model,
         )
         st.session_state.pop("indexed_signature", None)
+        INDEXED_CHUNKS.set(0)
+        INDEXED_DOCUMENTS.set(0)
+        REQUEST_COUNTER.labels(action="clear_cache", provider=embedding_provider, status="success").inc()
+        LAST_EVENT_AT.set(time.time())
+        _log_event(
+            "embedding_cache_cleared",
+            request_id=request_id,
+            provider=embedding_provider,
+            model=embedding_model or "all-models",
+            removed_registry_entries=summary["removed_registry_entries"],
+            vector_dir_removed=summary["vector_dir_removed"],
+        )
         st.warning(
             f"已清除 {summary['provider']} / {summary['model']} 快取，"
             f"移除 {summary['removed_registry_entries']} 筆索引紀錄，"
@@ -337,41 +446,83 @@ if uploaded_file:
 
     do_embedding = st.button("執行 Embedding", type="primary", use_container_width=True)
     if do_embedding:
-        progress = st.progress(0, text="開始處理文件...")
-        with open(save_path, "wb") as f:
-            f.write(file_bytes)
-        progress.progress(20, text="已儲存檔案，準備解析 PDF...")
-        cache_hit = is_document_embedded(
-            file_hash=file_hash,
+        request_id = uuid4().hex[:12]
+        embedding_started_at = time.perf_counter()
+        _log_event(
+            "embedding_requested",
+            request_id=request_id,
             provider=embedding_provider,
-            model=embedding_model,
+            model=embedding_model or "default",
+            file_name=uploaded_file.name,
+            file_hash=file_hash,
+            needs_reindex=needs_reindex,
         )
-
-        chunks = process_pdf(save_path)
-        progress.progress(55, text=f"PDF 解析完成，切分 {len(chunks)} 個區塊...")
-
-        if cache_hit:
-            progress.progress(100, text="偵測到已存在索引，已採用本地切分內容並略過模型嵌入。")
-            st.info("此文件已完成過相同 Embedding 設定，已直接重用既有向量索引。")
-        else:
-            for idx, chunk in enumerate(chunks):
-                chunk.metadata = dict(chunk.metadata or {})
-                chunk.metadata["source_file"] = uploaded_file.name
-                chunk.metadata["file_hash"] = file_hash
-                chunk.metadata["embedding_provider"] = embedding_provider
-                chunk.metadata["embedding_model"] = embedding_model or "default"
-                chunk.metadata["chunk_index"] = idx
-
-            save_to_chroma(
-                chunks,
+        progress = st.progress(0, text="開始處理文件...")
+        try:
+            with open(save_path, "wb") as f:
+                f.write(file_bytes)
+            progress.progress(20, text="已儲存檔案，準備解析 PDF...")
+            cache_hit = is_document_embedded(
+                file_hash=file_hash,
                 provider=embedding_provider,
                 model=embedding_model,
-                file_hash=file_hash,
-                file_name=uploaded_file.name,
             )
-            progress.progress(100, text="Embedding 與向量索引完成。")
-        st.session_state["indexed_signature"] = index_signature
-        st.success("索引建立完成，現在可以開始提問。")
+
+            chunks = process_pdf(save_path)
+            progress.progress(55, text=f"PDF 解析完成，切分 {len(chunks)} 個區塊...")
+
+            if cache_hit:
+                progress.progress(100, text="偵測到已存在索引，已採用本地切分內容並略過模型嵌入。")
+                st.info("此文件已完成過相同 Embedding 設定，已直接重用既有向量索引。")
+            else:
+                for idx, chunk in enumerate(chunks):
+                    chunk.metadata = dict(chunk.metadata or {})
+                    chunk.metadata["source_file"] = uploaded_file.name
+                    chunk.metadata["file_hash"] = file_hash
+                    chunk.metadata["embedding_provider"] = embedding_provider
+                    chunk.metadata["embedding_model"] = embedding_model or "default"
+                    chunk.metadata["chunk_index"] = idx
+
+                save_to_chroma(
+                    chunks,
+                    provider=embedding_provider,
+                    model=embedding_model,
+                    file_hash=file_hash,
+                    file_name=uploaded_file.name,
+                )
+                progress.progress(100, text="Embedding 與向量索引完成。")
+
+            INDEXED_CHUNKS.set(len(chunks))
+            INDEXED_DOCUMENTS.set(1)
+            st.session_state["indexed_signature"] = index_signature
+            elapsed = time.perf_counter() - embedding_started_at
+            REQUEST_LATENCY.labels(action="embedding").observe(elapsed)
+            _record_success(
+                "embedding",
+                embedding_provider,
+                request_id,
+                model=embedding_model or "default",
+                file_name=uploaded_file.name,
+                file_hash=file_hash,
+                chunk_count=len(chunks),
+                cache_hit=cache_hit,
+                elapsed_seconds=round(elapsed, 3),
+            )
+            st.success("索引建立完成，現在可以開始提問。")
+        except Exception as exc:
+            elapsed = time.perf_counter() - embedding_started_at
+            REQUEST_LATENCY.labels(action="embedding").observe(elapsed)
+            _record_failure(
+                "embedding",
+                embedding_provider,
+                request_id,
+                exc,
+                model=embedding_model or "default",
+                file_name=uploaded_file.name,
+                file_hash=file_hash,
+                elapsed_seconds=round(elapsed, 3),
+            )
+            st.error(f"Embedding 失敗：{exc}")
 
     # 對話區
     if "messages" not in st.session_state:
@@ -387,19 +538,48 @@ if uploaded_file:
         st.warning("目前尚未完成此檔案/設定的索引，請先按『執行 Embedding』。")
 
     if prompt := st.chat_input("請問關於這份文件的任何問題？", disabled=not current_ready):
+        request_id = uuid4().hex[:12]
+        query_started_at = time.perf_counter()
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            # 取得答案
-            db = get_vectorstore(provider=embedding_provider, model=embedding_model)
-            response = get_answer(
-                db,
-                prompt,
-                provider=llm_provider,
-                model=llm_model,
-            )
-            answer = response["result"]
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            try:
+                db = get_vectorstore(provider=embedding_provider, model=embedding_model)
+                response = get_answer(
+                    db,
+                    prompt,
+                    provider=llm_provider,
+                    model=llm_model,
+                )
+                answer = response["result"]
+                elapsed = time.perf_counter() - query_started_at
+                REQUEST_LATENCY.labels(action="query").observe(elapsed)
+                _record_success(
+                    "query",
+                    llm_provider,
+                    request_id,
+                    embedding_provider=embedding_provider,
+                    embedding_model=embedding_model or "default",
+                    llm_model=llm_model,
+                    question_length=len(prompt),
+                    elapsed_seconds=round(elapsed, 3),
+                )
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+            except Exception as exc:
+                elapsed = time.perf_counter() - query_started_at
+                REQUEST_LATENCY.labels(action="query").observe(elapsed)
+                _record_failure(
+                    "query",
+                    llm_provider,
+                    request_id,
+                    exc,
+                    embedding_provider=embedding_provider,
+                    embedding_model=embedding_model or "default",
+                    llm_model=llm_model,
+                    question_length=len(prompt),
+                    elapsed_seconds=round(elapsed, 3),
+                )
+                st.error(f"問答失敗：{exc}")

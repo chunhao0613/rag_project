@@ -18,6 +18,20 @@
 
 完整的 50 小時每 2 小時區塊執行表請見 [docs/sre_mvp_timeline.md](docs/sre_mvp_timeline.md)。
 
+## 05 階段：最小測試與品質入口（本機）
+
+已提供 `tests/` 骨架與 `Makefile` 指令：
+
+- `make lint`：檢查核心程式碼與測試（`core/`、`services/`、`tests/`、`app.py`）
+- `make test`：執行測試
+- `make check`：一鍵執行 lint + test
+
+目前優先覆蓋的核心路徑：
+
+- 文件處理：`core/document_processor.py`
+- 向量化：`services/vector_store.py`
+- 模型選擇（LLM provider routing）：`services/llm_service.py`
+
 ## MVP 驗收標準 (Acceptance Criteria)
 
 本專案的成功定義基於以下 6 項硬性指標：
