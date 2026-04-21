@@ -17,7 +17,6 @@
 - [完整實作日誌（03~25）](docs/log.md)
 - [01~25 專家級細節筆記（新版）](docs/sre_expert_notes_01_25_new.md)
 - [故障演練與復盤模板](docs/incident_drills.md)
-- [面試彩排包](docs/interview_rehearsal.md)
 
 ## 專案概述
 
